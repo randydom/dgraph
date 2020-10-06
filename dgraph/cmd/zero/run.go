@@ -18,6 +18,7 @@ package zero
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net"
@@ -32,6 +33,7 @@ import (
 	"go.opencensus.io/zpages"
 	"golang.org/x/net/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/dgraph-io/dgraph/conn"
 	"github.com/dgraph-io/dgraph/ee/enc"
@@ -41,6 +43,7 @@ import (
 	"github.com/dgraph-io/ristretto/z"
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 type options struct {
@@ -105,11 +108,19 @@ type state struct {
 func (st *state) serveGRPC(l net.Listener, store *raftwal.DiskStorage) {
 	x.RegisterExporters(Zero.Conf, "dgraph.zero")
 
+	zeroGrpcConf := viper.New()
+	zeroGrpcConf.Set("tls_dir", "/home/ash/mycerts/tls")
+	zeroGrpcConf.Set("tls_client_auth", tls.RequireAndVerifyClientCert)
+	zeroGrpcConf.Set("tls_use_system_ca", false)
+	tlsConf, err := x.LoadServerTLSConfig(zeroGrpcConf, "node.crt", "node.key")
+	x.Check(err)
 	s := grpc.NewServer(
 		grpc.MaxRecvMsgSize(x.GrpcMaxSize),
 		grpc.MaxSendMsgSize(x.GrpcMaxSize),
 		grpc.MaxConcurrentStreams(1000),
-		grpc.StatsHandler(&ocgrpc.ServerHandler{}))
+		grpc.StatsHandler(&ocgrpc.ServerHandler{}),
+		grpc.Creds(credentials.NewTLS(tlsConf)),
+	)
 
 	rc := pb.RaftContext{Id: opts.nodeId, Addr: x.WorkerConfig.MyAddr, Group: 0}
 	m := conn.NewNode(&rc, store)

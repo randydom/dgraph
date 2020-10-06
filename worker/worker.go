@@ -19,6 +19,7 @@
 package worker
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log"
 	"math"
@@ -33,10 +34,12 @@ import (
 	"github.com/dgraph-io/dgraph/protos/pb"
 	"github.com/dgraph-io/dgraph/x"
 	"github.com/pkg/errors"
+	"github.com/spf13/viper"
 	"go.opencensus.io/plugin/ocgrpc"
 
 	"github.com/golang/glog"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 var (
@@ -63,11 +66,20 @@ func Init(ps *badger.DB) {
 	limiter = rateLimiter{c: sync.NewCond(&sync.Mutex{}), max: x.WorkerConfig.NumPendingProposals}
 	go limiter.bleed()
 
+	workerConf := viper.New()
+	workerConf.Set("tls_dir", "/home/ash/mycerts/tls")
+	workerConf.Set("tls_client_auth", tls.RequireAndVerifyClientCert)
+	workerConf.Set("tls_use_system_ca", false)
+	tlsConf, err := x.LoadServerTLSConfig(workerConf, "node.crt", "node.key")
+	fmt.Println(tlsConf, err)
+
 	workerServer = grpc.NewServer(
 		grpc.MaxRecvMsgSize(x.GrpcMaxSize),
 		grpc.MaxSendMsgSize(x.GrpcMaxSize),
 		grpc.MaxConcurrentStreams(math.MaxInt32),
-		grpc.StatsHandler(&ocgrpc.ServerHandler{}))
+		grpc.StatsHandler(&ocgrpc.ServerHandler{}),
+		grpc.Creds(credentials.NewTLS(tlsConf)),
+	)
 }
 
 // grpcWorker struct implements the gRPC server interface.

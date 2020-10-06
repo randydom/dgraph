@@ -18,6 +18,7 @@ package conn
 
 import (
 	"context"
+	"crypto/tls"
 	"sync"
 	"time"
 
@@ -27,9 +28,11 @@ import (
 	"github.com/dgraph-io/ristretto/z"
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
+	"github.com/spf13/viper"
 	"go.opencensus.io/plugin/ocgrpc"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 var (
@@ -144,7 +147,16 @@ func (p *Pools) Connect(addr string) *Pool {
 		return existingPool
 	}
 
-	pool, err := newPool(addr)
+	vConf := viper.New()
+	vConf.Set("tls_cacert", "/home/ash/mycerts/tls/ca.crt")
+	vConf.Set("tls_use_system_ca", true)
+	vConf.Set("tls_server_name", "localhost")
+	vConf.Set("tls_cert", "/home/ash/mycerts/tls/client.dgraphuser.crt")
+	vConf.Set("tls_key", "/home/ash/mycerts/tls/client.dgraphuser.key")
+
+	tlsCfg, err := x.LoadClientTLSConfig(vConf)
+	x.Check(err)
+	pool, err := newPool(addr, tlsCfg)
 	if err != nil {
 		glog.Errorf("Unable to connect to host: %s", addr)
 		return nil
@@ -163,7 +175,7 @@ func (p *Pools) Connect(addr string) *Pool {
 }
 
 // newPool creates a new "pool" with one gRPC connection, refcount 0.
-func newPool(addr string) (*Pool, error) {
+func newPool(addr string, tlsCfg *tls.Config) (*Pool, error) {
 	conn, err := grpc.Dial(addr,
 		grpc.WithStatsHandler(&ocgrpc.ClientHandler{}),
 		grpc.WithDefaultCallOptions(
@@ -171,7 +183,7 @@ func newPool(addr string) (*Pool, error) {
 			grpc.MaxCallSendMsgSize(x.GrpcMaxSize),
 			grpc.UseCompressor((snappyCompressor{}).Name())),
 		grpc.WithBackoffMaxDelay(time.Second),
-		grpc.WithInsecure())
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	if err != nil {
 		return nil, err
 	}
