@@ -28,7 +28,6 @@ import (
 	"github.com/dgraph-io/ristretto/z"
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
-	"github.com/spf13/viper"
 	"go.opencensus.io/plugin/ocgrpc"
 
 	"google.golang.org/grpc"
@@ -147,32 +146,7 @@ func (p *Pools) Connect(addr string) *Pool {
 		return existingPool
 	}
 
-	vConf := viper.New()
-	vConf.Set("tls_cacert", "/home/amanbansal/Desktop/tmp/tls/ca.crt")
-	vConf.Set("tls_use_system_ca", true)
-	vConf.Set("tls_server_name", "localhost")
-	vConf.Set("tls_cert", "/home/amanbansal/Desktop/tmp/tls/client.dgraphuser.crt")
-	vConf.Set("tls_key", "/home/amanbansal/Desktop/tmp/tls/client.dgraphuser.key")
-	vConf.Set("tls_client_auth", "REQUIREANDVERIFY")
-
-	tlsCfg, err := x.LoadClientTLSConfig(vConf)
-	x.Check(err)
-	pool, err := newPool(addr, tlsCfg)
-	if err != nil {
-		glog.Errorf("Unable to connect to host: %s", addr)
-		return nil
-	}
-
-	p.Lock()
-	defer p.Unlock()
-	existingPool, has = p.all[addr]
-	if has {
-		go pool.shutdown() // Not being used, so release the resources.
-		return existingPool
-	}
-	glog.Infof("CONNECTING to %s\n", addr)
-	p.all[addr] = pool
-	return pool
+	return p.ConnectWithTLS(addr, nil)
 }
 
 func (p *Pools) ConnectWithTLS(addr string, tlsConf *x.TLSHelperConfig) *Pool {
@@ -181,17 +155,9 @@ func (p *Pools) ConnectWithTLS(addr string, tlsConf *x.TLSHelperConfig) *Pool {
 		return existingPool
 	}
 
-	//vConf := viper.New()
-	//vConf.Set("tls_cacert", "/home/amanbansal/Desktop/tmp/tls/ca.crt")
-	//vConf.Set("tls_use_system_ca", true)
-	//vConf.Set("tls_server_name", "localhost")
-	//vConf.Set("tls_cert", "/home/amanbansal/Desktop/tmp/tls/client.dgraphuser.crt")
-	//vConf.Set("tls_key", "/home/amanbansal/Desktop/tmp/tls/client.dgraphuser.key")
-	//vConf.Set("tls_client_auth", "REQUIREANDVERIFY")
-
-	x.GenerateClientTLSConfig(tlsConf)
+	tls, err := x.GenerateClientTLSConfig(tlsConf)
 	x.Check(err)
-	pool, err := newPool(addr, tlsCfg)
+	pool, err := newPool(addr, tls)
 	if err != nil {
 		glog.Errorf("Unable to connect to host: %s", addr)
 		return nil
@@ -212,14 +178,19 @@ func (p *Pools) ConnectWithTLS(addr string, tlsConf *x.TLSHelperConfig) *Pool {
 
 // newPool creates a new "pool" with one gRPC connection, refcount 0.
 func newPool(addr string, tlsCfg *tls.Config) (*Pool, error) {
-	conn, err := grpc.Dial(addr,
+	conOpts := []grpc.DialOption {
 		grpc.WithStatsHandler(&ocgrpc.ClientHandler{}),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(x.GrpcMaxSize),
 			grpc.MaxCallSendMsgSize(x.GrpcMaxSize),
 			grpc.UseCompressor((snappyCompressor{}).Name())),
 		grpc.WithBackoffMaxDelay(time.Second),
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	}
+
+	if tlsCfg != nil {
+		conOpts = append(conOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	}
+	conn, err := grpc.Dial(addr, conOpts...)
 	if err != nil {
 		return nil, err
 	}
