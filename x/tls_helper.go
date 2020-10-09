@@ -72,6 +72,23 @@ func LoadServerTLSConfig(v *viper.Viper, tlsCertFile string, tlsKeyFile string) 
 	return GenerateServerTLSConfig(&conf)
 }
 
+// LoadServerTLSConfigFromDir loads the TLS config into the server with the given parameters.
+func LoadServerTLSConfigFromDir(certDir string, tlsCertFile string, tlsKeyFile string, clientAuth string, useSystemCA bool) (*tls.Config,
+	error) {
+	conf := TLSHelperConfig{}
+	conf.CertDir = certDir
+	if conf.CertDir != "" {
+		conf.CertRequired = true
+		conf.RootCACert = path.Join(conf.CertDir, tlsRootCert)
+		conf.Cert = path.Join(conf.CertDir, tlsCertFile)
+		conf.Key = path.Join(conf.CertDir, tlsKeyFile)
+		conf.ClientAuth = clientAuth
+	}
+
+	conf.UseSystemCACerts = useSystemCA
+	return GenerateServerTLSConfig(&conf)
+}
+
 // SlashTLSConfig returns the TLS config appropriate for SlashGraphQL
 // This assumes that endpoint is not empty, and in the format "domain.grpc.cloud.dg.io:443"
 func SlashTLSConfig(endpoint string) (*tls.Config, error) {
@@ -207,13 +224,36 @@ func GenerateServerTLSConfig(config *TLSHelperConfig) (tlsCfg *tls.Config, err e
 	return nil, nil
 }
 
-// GenerateClientTLSConfig creates and returns a new client side *tls.Config with the
+// GenerateClientTLSConfig creates and returns a new client side *tls.Config with tzhe
 // configuration provided.
 func GenerateClientTLSConfig(config *TLSHelperConfig) (tlsCfg *tls.Config, err error) {
-	pool, err := generateCertPool(config.RootCACert, config.UseSystemCACerts)
-	if err != nil {
-		return nil, err
+	caCert := config.RootCACert
+	if caCert != "" {
+		tlsCfg := tls.Config{}
+
+		// 1. set up the root CA
+		pool, err := generateCertPool(caCert, config.UseSystemCACerts)
+		if err != nil {
+			return nil, err
+		}
+		tlsCfg.RootCAs = pool
+
+		// 2. set up the server name for verification
+		tlsCfg.ServerName = config.ServerName
+
+		// 3. optionally load the client cert files
+		certFile := config.Cert
+		keyFile := config.Key
+		if certFile != "" && keyFile != "" {
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return nil, err
+			}
+			tlsCfg.Certificates = []tls.Certificate{cert}
+		}
+
+		return &tlsCfg, nil
 	}
 
-	return &tls.Config{RootCAs: pool, ServerName: config.ServerName}, nil
+	return nil, nil
 }

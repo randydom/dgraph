@@ -20,9 +20,11 @@ package worker
 
 import (
 	"fmt"
+	"github.com/spf13/viper"
 	"log"
 	"math"
 	"net"
+	"path"
 	"sync"
 	"sync/atomic"
 
@@ -37,6 +39,7 @@ import (
 
 	"github.com/golang/glog"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 var (
@@ -56,18 +59,38 @@ func workerPort() int {
 }
 
 // Init initializes this package.
-func Init(ps *badger.DB) {
+func Init(config *viper.Viper, ps *badger.DB) {
 	pstore = ps
 	rt = newRestoreTracker()
 	// needs to be initialized after group config
 	limiter = rateLimiter{c: sync.NewCond(&sync.Mutex{}), max: x.WorkerConfig.NumPendingProposals}
 	go limiter.bleed()
 
-	workerServer = grpc.NewServer(
+	grpcOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(x.GrpcMaxSize),
 		grpc.MaxSendMsgSize(x.GrpcMaxSize),
 		grpc.MaxConcurrentStreams(math.MaxInt32),
-		grpc.StatsHandler(&ocgrpc.ServerHandler{}))
+		grpc.StatsHandler(&ocgrpc.ServerHandler{}),
+	}
+
+	tlsConf := &x.TLSHelperConfig{}
+	tlsConf.UseSystemCACerts = true
+	tlsConf.CertDir = config.GetString("alpha_tls_dir")
+	if tlsConf.CertDir != "" {
+		tlsConf.CertRequired = true
+		tlsConf.RootCACert = path.Join(tlsConf.CertDir, "ca.crt")
+		tlsConf.Cert = path.Join(tlsConf.CertDir, "node.crt")
+		tlsConf.Key = path.Join(tlsConf.CertDir, "node.key")
+		tlsConf.ClientAuth = "REQUIREANDVERIFY"
+	}
+
+	tls, err := x.GenerateServerTLSConfig(tlsConf)
+	x.Check(err)
+
+	if tlsConf != nil {
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tls)))
+	}
+	workerServer = grpc.NewServer(grpcOpts...)
 }
 
 // grpcWorker struct implements the gRPC server interface.

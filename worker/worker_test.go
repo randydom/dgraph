@@ -19,6 +19,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"github.com/spf13/viper"
 	"io/ioutil"
 	"math"
 	"os"
@@ -388,7 +389,7 @@ func TestMain(m *testing.M) {
 	pstore = ps
 	// Not using posting list cache
 	posting.Init(ps, 0)
-	Init(ps)
+	Init(&viper.Viper{}, ps)
 
 	os.Exit(m.Run())
 }

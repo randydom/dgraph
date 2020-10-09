@@ -184,6 +184,8 @@ they form a Raft group and provide synchronous replication.
 	flag.Bool("tls_use_system_ca", true, "Include System CA into CA Certs.")
 	flag.String("tls_client_auth", "VERIFYIFGIVEN", "Enable TLS client authentication")
 
+	flag.String("alpha_tls_dir", "", "Path to directory that has mTLS certificates and keys for alpha internal communication")
+
 	//Custom plugins.
 	flag.String("custom_tokenizers", "",
 		"Comma separated list of tokenizer plugins")
@@ -717,7 +719,7 @@ func run() {
 	schema.Init(worker.State.Pstore)
 	posting.Init(worker.State.Pstore, postingListCacheSize)
 	defer posting.Cleanup()
-	worker.Init(worker.State.Pstore)
+	worker.Init(Alpha.Conf, worker.State.Pstore)
 
 	// setup shutdown os signal handler
 	sdCh := make(chan os.Signal, 3)

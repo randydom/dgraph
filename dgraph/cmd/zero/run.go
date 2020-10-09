@@ -19,11 +19,13 @@ package zero
 import (
 	"context"
 	"fmt"
+	"github.com/dgraph-io/dgraph/dgraph/cmd/alpha"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"syscall"
 	"time"
 
@@ -32,6 +34,7 @@ import (
 	"go.opencensus.io/zpages"
 	"golang.org/x/net/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/dgraph-io/dgraph/conn"
 	"github.com/dgraph-io/dgraph/ee/enc"
@@ -88,6 +91,7 @@ instances to achieve high-availability.
 	flag.StringP("wal", "w", "zw", "Directory storing WAL.")
 	flag.Duration("rebalance_interval", 8*time.Minute, "Interval for trying a predicate move.")
 	flag.String("enterprise_license", "", "Path to the enterprise license file.")
+	flag.String("zero_tls_dir", "ztls", "Path to directory that has tls certificates to be used by zero for internal communication")
 }
 
 func setupListener(addr string, port int, kind string) (listener net.Listener, err error) {
@@ -104,12 +108,31 @@ type state struct {
 
 func (st *state) serveGRPC(l net.Listener, store *raftwal.DiskStorage) {
 	x.RegisterExporters(Zero.Conf, "dgraph.zero")
-
-	s := grpc.NewServer(
+	grpcOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(x.GrpcMaxSize),
 		grpc.MaxSendMsgSize(x.GrpcMaxSize),
 		grpc.MaxConcurrentStreams(1000),
-		grpc.StatsHandler(&ocgrpc.ServerHandler{}))
+		grpc.StatsHandler(&ocgrpc.ServerHandler{}),
+	}
+
+	conf := &x.TLSHelperConfig{}
+	conf.UseSystemCACerts = true
+	conf.CertDir = alpha.Alpha.Conf.GetString("zero_tls_dir")
+	if conf.CertDir != "" {
+		conf.CertRequired = true
+		conf.RootCACert = path.Join(conf.CertDir, "ca.crt")
+		conf.Cert = path.Join(conf.CertDir, "node.crt")
+		conf.Key = path.Join(conf.CertDir, "node.key")
+		conf.ClientAuth = "REQUIREANDVERIFY"
+	}
+
+	tlsConf, err := x.GenerateServerTLSConfig(conf)
+	x.Check(err)
+
+	if tlsConf != nil {
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConf)))
+	}
+	s := grpc.NewServer(grpcOpts...)
 
 	rc := pb.RaftContext{Id: opts.nodeId, Addr: x.WorkerConfig.MyAddr, Group: 0}
 	m := conn.NewNode(&rc, store)
